@@ -45,6 +45,7 @@ import {
   deleteProperty,
   clearAllProperties
 } from "@/lib/db";
+import { supabase } from "@/lib/supabase";
 import SeridoMap from "@/components/SeridoMap";
 
 // Helper functions defined outside the component to preserve React component purity
@@ -68,7 +69,7 @@ function getFormattedPatrolDate(): string {
 }
 
 // Simulated default credentials for simple demonstration
-const DEFAULT_BADGE = "123456-7";
+const DEFAULT_BADGE = "agente@patrulha.gov";
 const DEFAULT_PASSWORD = "senha_patrulha";
 
 export default function PatrulhaRuralApp() {
@@ -99,6 +100,7 @@ export default function PatrulhaRuralApp() {
   const [loginPassword, setLoginPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loginError, setLoginError] = useState("");
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
 
   // Search States
   const [searchQuery, setSearchQuery] = useState("");
@@ -129,14 +131,38 @@ export default function PatrulhaRuralApp() {
   }, []);
 
   useEffect(() => {
-    Promise.resolve().then(() => {
+    Promise.resolve().then(async () => {
       setIsMounted(true);
-      const user = localStorage.getItem("patrulha_user");
-      if (user) {
-        setIsLoggedIn(true);
-        setCurrentUser(user);
-        setCurrentView("search");
+      
+      try {
+        const { data: { session }, error } = await supabase.auth.getSession();
+        if (session?.user) {
+          const email = session.user.email || "";
+          const badgeName = email.split("@")[0] || "Agente";
+          const formattedUser = `Agente ${badgeName}`;
+          setIsLoggedIn(true);
+          setCurrentUser(formattedUser);
+          localStorage.setItem("patrulha_user", formattedUser);
+          setCurrentView("search");
+        } else {
+          // Fallback to local storage if no active Supabase session
+          const user = localStorage.getItem("patrulha_user");
+          if (user) {
+            setIsLoggedIn(true);
+            setCurrentUser(user);
+            setCurrentView("search");
+          }
+        }
+      } catch (err) {
+        console.error("Erro ao verificar sessão do Supabase no login:", err);
+        const user = localStorage.getItem("patrulha_user");
+        if (user) {
+          setIsLoggedIn(true);
+          setCurrentUser(user);
+          setCurrentView("search");
+        }
       }
+
       const saved = localStorage.getItem("patrulha_recent_searches");
       if (saved) {
         try {
@@ -449,28 +475,48 @@ export default function PatrulhaRuralApp() {
   };
 
   // Handle Login submission
-  const handleLoginSubmit = (e: React.FormEvent) => {
+  const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!loginBadge.trim() || !loginPassword.trim()) {
       setLoginError("Por favor, preencha todos os campos.");
       return;
     }
 
-    // In a real police application, this would validate with an API.
-    // Here we allow pre-filled default, or any valid-looking badge for immediate testing!
-    if (
-      (loginBadge === DEFAULT_BADGE && loginPassword === DEFAULT_PASSWORD) || 
-      (loginBadge.length >= 4 && loginPassword.length >= 4)
-    ) {
-      const formattedUser = `Agente ${loginBadge.split("-")[0] || loginBadge}`;
-      setIsLoggedIn(true);
-      setCurrentUser(formattedUser);
-      localStorage.setItem("patrulha_user", formattedUser);
-      setLoginError("");
-      setCurrentView("search");
-      showSuccessFeedback("Acesso autorizado. Patrulha iniciada!");
-    } else {
-      setLoginError("Credenciais inválidas. Use a matrícula demonstrativa abaixo.");
+    setIsLoggingIn(true);
+    setLoginError("");
+
+    try {
+      // Normaliza o campo para o formato de email para o Supabase Auth.
+      // Se não for email válido, assume formato badge e acrescenta @patrulha.gov
+      const email = loginBadge.includes("@") ? loginBadge.trim() : `${loginBadge.trim()}@patrulha.gov`;
+
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password: loginPassword,
+      });
+
+      if (error) {
+        setLoginError(error.message || "Erro na autenticação. Verifique os dados.");
+        showErrorFeedback("Erro no Login: " + error.message);
+        return;
+      }
+
+      if (data?.user) {
+        const userEmail = data.user.email || "";
+        const badgeName = userEmail.split("@")[0] || loginBadge;
+        const formattedUser = `Agente ${badgeName}`;
+        
+        setIsLoggedIn(true);
+        setCurrentUser(formattedUser);
+        localStorage.setItem("patrulha_user", formattedUser);
+        setCurrentView("search");
+        showSuccessFeedback("Acesso autorizado. Patrulha iniciada!");
+      }
+    } catch (err: any) {
+      console.error(err);
+      setLoginError(err.message || "Erro inesperado ao realizar login.");
+    } finally {
+      setIsLoggingIn(false);
     }
   };
 
@@ -482,11 +528,17 @@ export default function PatrulhaRuralApp() {
   };
 
   // Logout
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      await supabase.auth.signOut();
+    } catch (err) {
+      console.error("Erro ao realizar logout do Supabase:", err);
+    }
     setIsLoggedIn(false);
     setCurrentUser("");
     localStorage.removeItem("patrulha_user");
     setCurrentView("login");
+    showSuccessFeedback("Sessão encerrada!");
   };
 
   // Mask inputs
@@ -864,10 +916,20 @@ export default function PatrulhaRuralApp() {
 
                     <button
                       type="submit"
-                      className="w-full bg-[#bfcca1] hover:bg-[#dbe8bc] text-[#2a3416] font-bold py-3 rounded-lg text-sm transition-all flex items-center justify-center gap-2 mt-2 shadow-md active:scale-[0.98]"
+                      disabled={isLoggingIn}
+                      className="w-full bg-[#bfcca1] hover:bg-[#dbe8bc] disabled:bg-[#45483e] disabled:text-[#76786d] text-[#2a3416] font-bold py-3 rounded-lg text-sm transition-all flex items-center justify-center gap-2 mt-2 shadow-md active:scale-[0.98] disabled:cursor-not-allowed"
                     >
-                      <Shield className="w-4 h-4" />
-                      Acessar Sistema
+                      {isLoggingIn ? (
+                        <>
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                          Autenticando...
+                        </>
+                      ) : (
+                        <>
+                          <Shield className="w-4 h-4" />
+                          Acessar Sistema
+                        </>
+                      )}
                     </button>
                   </form>
 
