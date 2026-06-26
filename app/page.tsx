@@ -50,8 +50,42 @@ import SeridoMap from "@/components/SeridoMap";
 
 // Helper functions defined outside the component to preserve React component purity
 function generateDefaultPhoto(): string {
-  const randomPicId = Math.floor(Math.random() * 1000);
-  return `https://picsum.photos/seed/${randomPicId}/800/600`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" width="100%" height="100%">
+    <rect width="100%" height="100%" fill="#1a1c18"/>
+    <rect x="20" y="20" width="760" height="560" rx="15" fill="none" stroke="#45483e" stroke-width="4" stroke-dasharray="10 10"/>
+    <g transform="translate(400, 240) scale(3)" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M-20,10 L-20,30 L20,30 L20,10" fill="none" stroke="%2376786d" stroke-width="2"/>
+      <path d="M-25,10 L0,-15 L25,10" fill="none" stroke="%23bfcca1" stroke-width="2"/>
+      <line x1="-30" y1="30" x2="30" y2="-20" stroke="%23ffb4ac" stroke-width="2.5"/>
+    </g>
+    <text x="50%" y="400" font-family="system-ui, -apple-system, sans-serif" font-size="28" font-weight="bold" fill="%23bfcca1" text-anchor="middle" letter-spacing="2">IMÓVEL SEM FOTO</text>
+    <text x="50%" y="440" font-family="system-ui, -apple-system, sans-serif" font-size="16" fill="%2376786d" text-anchor="middle">Nenhuma imagem cadastrada para esta propriedade rural</text>
+  </svg>`;
+  return `data:image/svg+xml;utf8,${svg.replace(/\n/g, "").replace(/\s+/g, " ")}`;
+}
+
+function parseBirthDateToDb(dateStr: string): string {
+  if (!dateStr) return "";
+  const parts = dateStr.split("/");
+  if (parts.length === 3) {
+    const [day, month, year] = parts;
+    if (day && month && year && year.length === 4) {
+      return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+    }
+  }
+  return dateStr;
+}
+
+function formatBirthDateToUi(dateStr: string): string {
+  if (!dateStr) return "";
+  if (dateStr.includes("-")) {
+    const parts = dateStr.split("-");
+    if (parts.length === 3) {
+      const [year, month, day] = parts;
+      return `${day}/${month}/${year}`;
+    }
+  }
+  return dateStr;
 }
 
 function getCurrentDateString(): string {
@@ -82,7 +116,7 @@ export default function PatrulhaRuralApp() {
   const [currentUser, setCurrentUser] = useState<string>("");
 
   // Supabase Integration State
-  const [dbSource, setDbSource] = useState<"local" | "supabase">("local");
+  const [dbSource, setDbSource] = useState<"local" | "supabase">("supabase");
   const [supabaseStatus, setSupabaseStatus] = useState<{
     connected: boolean;
     tableExists: boolean;
@@ -171,10 +205,8 @@ export default function PatrulhaRuralApp() {
           console.error(e);
         }
       }
-      const source = localStorage.getItem("patrulha_db_source") as "local" | "supabase";
-      if (source) {
-        setDbSource(source);
-      }
+      // Always force Supabase database source
+      setDbSource("supabase");
     });
   }, []);
 
@@ -280,13 +312,13 @@ export default function PatrulhaRuralApp() {
   const [isClearing, setIsClearing] = useState(false);
 
   const clearAllData = async () => {
-    if (!window.confirm("ATENÇÃO: Isso excluirá permanentemente TODOS os cadastros locais (IndexedDB) e da Nuvem (Supabase). Deseja continuar?")) {
+    if (!window.confirm("ATENÇÃO: Isso excluirá permanentemente TODOS os cadastros do banco de dados na Nuvem (Supabase). Deseja continuar?")) {
       return;
     }
     
     setIsClearing(true);
     try {
-      // 1. Clear Local IndexedDB
+      // 1. Clear Local IndexedDB silently
       await clearAllProperties();
       
       // 2. Clear Supabase if connected and table exists
@@ -307,7 +339,7 @@ export default function PatrulhaRuralApp() {
       setSelectedPropertyId(null);
       setSelectedProperty(null);
       
-      showSuccessFeedback("Todos os dados locais e de nuvem foram apagados!");
+      showSuccessFeedback("Todos os cadastros foram apagados com sucesso!");
       await refreshPropertiesList();
     } catch (err: any) {
       console.error(err);
@@ -397,16 +429,6 @@ export default function PatrulhaRuralApp() {
     } catch (err: any) {
       console.error("Erro ao carregar dados:", err);
       setErrorToast(err.message || "Erro ao carregar dados.");
-      
-      // Safe fallback: switch back to local if cloud fails
-      if (activeSource === "supabase") {
-        setDbSource("local");
-        localStorage.setItem("patrulha_db_source", "local");
-        const results = await searchProperties(query);
-        const all = await getAllProperties();
-        setPropertiesList(results);
-        setAllProperties(all);
-      }
     }
   }, [dbSource]);
 
@@ -645,7 +667,7 @@ export default function PatrulhaRuralApp() {
       gpsCoordinates: formData.gpsCoordinates.trim() || "-25.1234, -50.1234",
       ownerName: formData.ownerName.trim(),
       cpf: formData.cpf.trim() || "000.000.000-00",
-      birthDate: formData.birthDate || getCurrentDateString(),
+      birthDate: parseBirthDateToDb(formData.birthDate) || getCurrentDateString(),
       contactPhone: formData.contactPhone.trim() || "(00) 00000-0000",
       collaborativeOwner: formData.collaborativeOwner,
       wifiName: formData.wifiName.trim(),
@@ -813,7 +835,7 @@ export default function PatrulhaRuralApp() {
                 className="h-9 w-9 object-contain bg-white rounded-full p-0.5"
               />
               <div>
-                <h1 className="text-sm font-bold text-[#bfcca1] leading-tight">Patrulha Rural</h1>
+                <h1 className="text-sm font-bold text-[#bfcca1] leading-tight">Patrulha Rural | 6º BPM</h1>
                 <p className="text-[10px] text-[#c6c7bb] font-mono leading-none">{currentUser}</p>
               </div>
             </div>
@@ -850,7 +872,7 @@ export default function PatrulhaRuralApp() {
                       className="w-full h-full object-contain"
                     />
                   </div>
-                  <h1 className="text-2xl font-bold text-[#bfcca1] tracking-tight">Patrulha Rural</h1>
+                  <h1 className="text-2xl font-bold text-[#bfcca1] tracking-tight">Patrulha Rural Comunitária</h1>
                   <h2 className="text-lg text-[#fff9ef] font-semibold tracking-wide">6º BPM</h2>
                   <p className="text-xs text-[#c6c7bb] max-w-xs mt-2 font-medium">
                     Acesso restrito a agentes credenciados e patrulhas autorizadas.
@@ -1041,7 +1063,7 @@ export default function PatrulhaRuralApp() {
                           {/* Left thumbnail */}
                           <div className="w-16 h-16 rounded-lg overflow-hidden shrink-0 bg-[#121410] border border-[#45483e] relative">
                             <img 
-                              src={prop.photos[0] || `https://picsum.photos/seed/${prop.id}/150/150`} 
+                              src={prop.photos[0] || generateDefaultPhoto()} 
                               alt={prop.name} 
                               className="w-full h-full object-cover"
                             />
@@ -1190,7 +1212,7 @@ export default function PatrulhaRuralApp() {
                         gpsCoordinates: selectedProperty.gpsCoordinates,
                         ownerName: selectedProperty.ownerName,
                         cpf: selectedProperty.cpf,
-                        birthDate: selectedProperty.birthDate,
+                        birthDate: formatBirthDateToUi(selectedProperty.birthDate),
                         contactPhone: selectedProperty.contactPhone,
                         collaborativeOwner: selectedProperty.collaborativeOwner,
                         wifiName: selectedProperty.wifiName || "",
@@ -1220,7 +1242,7 @@ export default function PatrulhaRuralApp() {
                 {/* Property Main Image Cover */}
                 <div className="w-full h-48 rounded-xl overflow-hidden relative border border-[#45483e] bg-[#1a1c18]">
                   <img
-                    src={selectedProperty.photos[0]}
+                    src={selectedProperty.photos[0] || generateDefaultPhoto()}
                     alt={selectedProperty.name}
                     className="w-full h-full object-cover"
                   />
@@ -1277,7 +1299,7 @@ export default function PatrulhaRuralApp() {
                     </div>
                     <div className="flex justify-between">
                       <span className="text-[#76786d]">Nascimento:</span>
-                      <span className="text-[#e3e3dc]">{selectedProperty.birthDate.split("-").reverse().join("/")}</span>
+                      <span className="text-[#e3e3dc]">{formatBirthDateToUi(selectedProperty.birthDate)}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-[#76786d]">Contato Principal:</span>
@@ -1521,17 +1543,41 @@ export default function PatrulhaRuralApp() {
                           <div className="text-center p-4 text-[#76786d]">
                             <Camera className="w-8 h-8 mx-auto mb-1 opacity-60 text-[#bfcca1]" />
                             <p className="text-xs font-semibold">Nenhuma foto enviada</p>
-                            <p className="text-[10px] mt-1">Carregue um arquivo local ou informe um link abaixo</p>
+                            <p className="text-[10px] mt-1 font-medium">Tire uma foto com a câmera ou carregue um arquivo local</p>
                           </div>
                         )}
                       </div>
 
-                      {/* File Input and URL option */}
-                      <div className="space-y-3">
-                        <div>
-                          <label className="w-full flex items-center justify-center bg-[#3b4626] border border-[#bfcca1]/30 hover:border-[#bfcca1] text-[#bfcca1] text-xs font-bold py-2.5 rounded-lg cursor-pointer transition-all active:scale-[0.98] text-center">
-                            <Upload className="w-3.5 h-3.5 mr-2" />
-                            Tirar Foto ou Carregar Arquivo
+                      {/* File Inputs (Camera / Gallery) */}
+                      <div className="space-y-2">
+                        <div className="grid grid-cols-2 gap-2">
+                          {/* Camera Button */}
+                          <label className="flex flex-col items-center justify-center bg-[#3b4626] border border-[#bfcca1]/30 hover:border-[#bfcca1] text-[#bfcca1] text-[11px] font-bold py-2.5 px-2 rounded-lg cursor-pointer transition-all active:scale-[0.98] text-center gap-1">
+                            <Camera className="w-4 h-4" />
+                            <span>Tirar Foto (Câmera)</span>
+                            <input
+                              type="file"
+                              accept="image/*"
+                              capture="environment"
+                              className="hidden"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) {
+                                  const reader = new FileReader();
+                                  reader.onloadend = () => {
+                                    handleFormFieldChange("photo", reader.result as string);
+                                    showSuccessFeedback("Foto capturada com sucesso!");
+                                  };
+                                  reader.readAsDataURL(file);
+                                }
+                              }}
+                            />
+                          </label>
+
+                          {/* Gallery Button */}
+                          <label className="flex flex-col items-center justify-center bg-[#2a2d28] border border-[#45483e] hover:border-[#bfcca1] text-[#c6c7bb] hover:text-white text-[11px] font-bold py-2.5 px-2 rounded-lg cursor-pointer transition-all active:scale-[0.98] text-center gap-1">
+                            <Upload className="w-4 h-4" />
+                            <span>Escolher da Galeria</span>
                             <input
                               type="file"
                               accept="image/*"
@@ -1549,21 +1595,10 @@ export default function PatrulhaRuralApp() {
                               }}
                             />
                           </label>
-                          <p className="text-[10px] text-[#76786d] mt-1 text-center">
-                            Ideal para funcionamento offline. A foto será salva localmente no banco IndexedDB.
-                          </p>
                         </div>
-
-                        <div className="flex gap-2 items-center">
-                          <span className="text-[10px] text-[#76786d] uppercase font-extrabold shrink-0">Ou URL:</span>
-                          <input
-                            type="url"
-                            placeholder="Ex: https://imagens.com/minha-fazenda.jpg"
-                            value={formData.photo.startsWith("data:") ? "" : formData.photo}
-                            onChange={(e) => handleFormFieldChange("photo", e.target.value)}
-                            className="flex-1 bg-[#121410] border-2 border-[#45483e] focus:border-[#bfcca1] rounded-lg px-3 py-1.5 text-xs text-[#e3e3dc] outline-none transition-all placeholder-[#76786d]"
-                          />
-                        </div>
+                        <p className="text-[10px] text-[#76786d] text-center">
+                          A foto será integrada em tempo real com o banco de dados do Supabase.
+                        </p>
                       </div>
                     </div>
                   </fieldset>
@@ -1628,11 +1663,23 @@ export default function PatrulhaRuralApp() {
                           Nascimento
                         </label>
                         <input 
-                          type="date" 
+                          type="text" 
                           id="owner-birth"
+                          placeholder="DD/MM/AAAA"
+                          maxLength={10}
                           value={formData.birthDate}
-                          onChange={(e) => handleFormFieldChange("birthDate", e.target.value)}
-                          className="w-full bg-[#121410] border-2 border-[#45483e] focus:border-[#bfcca1] rounded-lg px-3 py-2 text-xs text-[#e3e3dc] outline-none transition-all"
+                          onChange={(e) => {
+                            const value = e.target.value;
+                            const digits = value.replace(/\D/g, "");
+                            let masked = digits;
+                            if (digits.length > 2 && digits.length <= 4) {
+                              masked = `${digits.slice(0, 2)}/${digits.slice(2)}`;
+                            } else if (digits.length > 4) {
+                              masked = `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4, 8)}`;
+                            }
+                            handleFormFieldChange("birthDate", masked);
+                          }}
+                          className="w-full bg-[#121410] border-2 border-[#45483e] focus:border-[#bfcca1] rounded-lg px-3 py-2.5 text-xs font-mono text-[#e3e3dc] outline-none transition-all placeholder-[#76786d]"
                         />
                       </div>
                     </div>
@@ -1812,9 +1859,9 @@ export default function PatrulhaRuralApp() {
               >
                 {/* Header Section */}
                 <div className="space-y-1">
-                  <h2 className="text-xl font-bold text-[#e3e3dc] tracking-tight">Sincronização Nuvem</h2>
+                  <h2 className="text-xl font-bold text-[#e3e3dc] tracking-tight">Conexão Supabase</h2>
                   <p className="text-xs text-[#c6c7bb]">
-                    Configure e sincronize os cadastros de patrulha rural com o banco de dados Supabase.
+                    Monitore o status e as configurações de conexão com o banco de dados principal do Supabase.
                   </p>
                 </div>
 
@@ -1882,108 +1929,6 @@ export default function PatrulhaRuralApp() {
                   </button>
                 </div>
 
-                {/* Database Toggle (Source Selector) */}
-                <div className="bg-[#1a1c18] border border-[#45483e] rounded-xl p-4 space-y-3">
-                  <div className="space-y-0.5">
-                    <h3 className="text-xs font-semibold uppercase tracking-wider text-[#bfcca1]">Banco de Dados Ativo</h3>
-                    <p className="text-[10px] text-[#76786d]">Escolha de onde ler e onde gravar os novos cadastros.</p>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2 p-1 bg-[#121410] rounded-lg border border-[#45483e]">
-                    <button
-                      onClick={() => {
-                        setDbSource("local");
-                        localStorage.setItem("patrulha_db_source", "local");
-                        refreshPropertiesList("", "local");
-                        showSuccessFeedback("Usando Banco de Dados Local (IndexedDB)");
-                      }}
-                      className={`py-2 px-3 rounded-md text-xs font-bold transition-all flex flex-col items-center gap-1 cursor-pointer ${
-                        dbSource === "local"
-                          ? "bg-[#3b4626] text-[#bfcca1] shadow-md border border-[#bfcca1]/20"
-                          : "text-[#76786d] hover:text-[#c6c7bb]"
-                      }`}
-                    >
-                      <Database className="w-4 h-4" />
-                      <span>Local (IndexedDB)</span>
-                    </button>
-
-                    <button
-                      onClick={() => {
-                        if (supabaseStatus?.connected && supabaseStatus?.tableExists) {
-                          setDbSource("supabase");
-                          localStorage.setItem("patrulha_db_source", "supabase");
-                          refreshPropertiesList("", "supabase");
-                          showSuccessFeedback("Usando Banco de Dados Supabase (Nuvem)");
-                        } else {
-                          showErrorFeedback("Não é possível ativar o Supabase sem a tabela criada.");
-                        }
-                      }}
-                      disabled={!supabaseStatus?.connected || !supabaseStatus?.tableExists}
-                      className={`py-2 px-3 rounded-md text-xs font-bold transition-all flex flex-col items-center gap-1 cursor-pointer ${
-                        dbSource === "supabase"
-                          ? "bg-[#3b4626] text-[#bfcca1] shadow-md border border-[#bfcca1]/20"
-                          : "text-[#76786d] hover:text-[#c6c7bb] disabled:opacity-40 disabled:cursor-not-allowed"
-                      }`}
-                    >
-                      <Cloud className="w-4 h-4" />
-                      <span>Supabase (Nuvem)</span>
-                    </button>
-                  </div>
-                </div>
-
-                {/* Synchronize Utilities */}
-                <div className="bg-[#1a1c18] border border-[#45483e] rounded-xl p-4 space-y-4">
-                  <div className="space-y-0.5">
-                    <h3 className="text-xs font-semibold uppercase tracking-wider text-[#bfcca1]">Sincronização de Dados</h3>
-                    <p className="text-[10px] text-[#76786d]">Transfira seus dados entre o navegador e a nuvem com um clique.</p>
-                  </div>
-
-                  {isSyncing && syncProgress.total > 0 && (
-                    <div className="space-y-1.5 p-3 bg-[#121410] border border-[#45483e] rounded-lg">
-                      <div className="flex justify-between text-[10px] font-mono text-[#c6c7bb]">
-                        <span>{syncProgress.type === "push" ? "Enviando para nuvem..." : "Baixando para local..."}</span>
-                        <span>{syncProgress.current} de {syncProgress.total} ({Math.round((syncProgress.current / syncProgress.total) * 100)}%)</span>
-                      </div>
-                      <div className="w-full bg-[#1a1c18] h-1.5 rounded-full overflow-hidden border border-[#45483e]/50">
-                        <div 
-                          className="bg-[#bfcca1] h-full transition-all duration-150" 
-                          style={{ width: `${(syncProgress.current / syncProgress.total) * 100}%` }}
-                        />
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="grid grid-cols-1 gap-2">
-                    <button
-                      onClick={syncLocalToSupabase}
-                      disabled={isSyncing || !supabaseStatus?.connected || !supabaseStatus?.tableExists}
-                      className="bg-[#1a1c18] hover:bg-[#20231f] border border-[#45483e] hover:border-[#bfcca1]/30 disabled:opacity-40 disabled:hover:bg-[#1a1c18] disabled:border-[#45483e] text-white text-xs font-bold py-3 px-4 rounded-lg transition-all flex items-center justify-between shadow-sm cursor-pointer"
-                    >
-                      <div className="flex items-center gap-2.5 text-left">
-                        <CloudUpload className="w-4 h-4 text-[#bfcca1]" />
-                        <div>
-                          <p className="font-semibold text-xs text-[#bfcca1]">Enviar para a Nuvem</p>
-                          <p className="text-[9px] text-[#76786d]">Envia todos os cadastros locais para o Supabase</p>
-                        </div>
-                      </div>
-                    </button>
-
-                    <button
-                      onClick={syncSupabaseToLocal}
-                      disabled={isSyncing || !supabaseStatus?.connected || !supabaseStatus?.tableExists}
-                      className="bg-[#1a1c18] hover:bg-[#20231f] border border-[#45483e] hover:border-[#bfcca1]/30 disabled:opacity-40 disabled:hover:bg-[#1a1c18] disabled:border-[#45483e] text-white text-xs font-bold py-3 px-4 rounded-lg transition-all flex items-center justify-between shadow-sm cursor-pointer"
-                    >
-                      <div className="flex items-center gap-2.5 text-left">
-                        <CloudDownload className="w-4 h-4 text-[#bfcca1]" />
-                        <div>
-                          <p className="font-semibold text-xs text-[#bfcca1]">Baixar para o Dispositivo</p>
-                          <p className="text-[9px] text-[#76786d]">Importa todos os cadastros da nuvem para o IndexedDB</p>
-                        </div>
-                      </div>
-                    </button>
-                  </div>
-                </div>
-
                 {/* Reset Database Section */}
                 <div className="bg-[#1a1c18] border border-[#690007]/30 rounded-xl p-4 space-y-3">
                   <div className="space-y-0.5">
@@ -1999,7 +1944,7 @@ export default function PatrulhaRuralApp() {
                     <Trash2 className="w-4 h-4 text-[#ffb4ac]" />
                     <div className="text-left">
                       <p className="font-semibold text-xs text-[#ffb4ac]">Apagar Todos os Dados</p>
-                      <p className="text-[9px] text-[#76786d]">Limpa o IndexedDB local e o banco de dados Supabase</p>
+                      <p className="text-[9px] text-[#76786d]">Limpa definitivamente todas as propriedades do banco de dados Supabase</p>
                     </div>
                   </button>
                 </div>
@@ -2074,21 +2019,6 @@ export default function PatrulhaRuralApp() {
             >
               <Plus className="w-5.5 h-5.5 mb-1" />
               <span className="text-[10px] tracking-wider uppercase">Novo Cadastro</span>
-            </button>
-
-            <button
-              onClick={() => {
-                setCurrentView("supabase");
-                checkSupabaseConnection();
-              }}
-              className={`flex flex-col items-center justify-center w-24 h-full text-center transition-all ${
-                currentView === "supabase"
-                  ? "text-[#bfcca1] font-bold"
-                  : "text-[#76786d] hover:text-[#c6c7bb]"
-              }`}
-            >
-              <Cloud className="w-5.5 h-5.5 mb-1" />
-              <span className="text-[10px] tracking-wider uppercase">Nuvem</span>
             </button>
           </nav>
         )}

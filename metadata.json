@@ -1,6 +1,6 @@
 {
-  "name": "Patrulha Rural Sentinel",
-  "description": "PWA mobile-first para policiamento e patrulha rural, com armazenamento IndexedDB offline-first e buscas rápidas de propriedades e moradores.",
-  "requestFramePermissions": ["geolocation"],
+  "name": "Patrulha Rural Comunitária | 6º BPM",
+  "description": "Aplicativo para policiamento e patrulha rural do 6º BPM, com cadastro de propriedades, moradores e integração em tempo real com o Supabase.",
+  "requestFramePermissions": ["geolocation", "camera"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
