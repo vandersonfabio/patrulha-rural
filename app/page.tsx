@@ -144,6 +144,27 @@ export default function PatrulhaRuralApp() {
   
   const [recentSearches, setRecentSearches] = useState<{ id: number; name: string; subtitle: string; type: "property" | "owner" }[]>([]);
 
+  // Authenticated fetch helper for server hardening
+  const authFetch = React.useCallback(async (url: string, options: RequestInit = {}): Promise<Response> => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      
+      const headers = new Headers(options.headers || {});
+      if (token) {
+        headers.set("Authorization", `Bearer ${token}`);
+      }
+      
+      return await fetch(url, {
+        ...options,
+        headers,
+      });
+    } catch (err) {
+      console.error("Erro no authFetch:", err);
+      return await fetch(url, options);
+    }
+  }, []);
+
   const checkSupabaseConnection = React.useCallback(async () => {
     setIsCheckingSupabase(true);
     try {
@@ -179,22 +200,18 @@ export default function PatrulhaRuralApp() {
           localStorage.setItem("patrulha_user", formattedUser);
           setCurrentView("search");
         } else {
-          // Fallback to local storage if no active Supabase session
-          const user = localStorage.getItem("patrulha_user");
-          if (user) {
-            setIsLoggedIn(true);
-            setCurrentUser(user);
-            setCurrentView("search");
-          }
+          // Hardening: Require real Supabase session, clear insecure local bypass
+          setIsLoggedIn(false);
+          setCurrentUser("");
+          localStorage.removeItem("patrulha_user");
+          setCurrentView("login");
         }
       } catch (err) {
         console.error("Erro ao verificar sessão do Supabase no login:", err);
-        const user = localStorage.getItem("patrulha_user");
-        if (user) {
-          setIsLoggedIn(true);
-          setCurrentUser(user);
-          setCurrentView("search");
-        }
+        setIsLoggedIn(false);
+        setCurrentUser("");
+        localStorage.removeItem("patrulha_user");
+        setCurrentView("login");
       }
 
       const saved = localStorage.getItem("patrulha_recent_searches");
@@ -278,7 +295,7 @@ export default function PatrulhaRuralApp() {
   const syncSupabaseToLocal = async () => {
     setIsSyncing(true);
     try {
-      const res = await fetch("/api/properties");
+      const res = await authFetch("/api/properties");
       if (!res.ok) {
         const errData = await res.json();
         throw new Error(errData.error || "Erro ao buscar dados do Supabase");
@@ -323,7 +340,7 @@ export default function PatrulhaRuralApp() {
       
       // 2. Clear Supabase if connected and table exists
       if (supabaseStatus?.connected && supabaseStatus?.tableExists) {
-        const res = await fetch("/api/properties?clearAll=true", {
+        const res = await authFetch("/api/properties?clearAll=true", {
           method: "DELETE"
         });
         if (!res.ok) {
@@ -384,7 +401,7 @@ export default function PatrulhaRuralApp() {
     const activeSource = forceSource || dbSource;
     try {
       if (activeSource === "supabase") {
-        const res = await fetch("/api/properties");
+        const res = await authFetch("/api/properties");
         if (!res.ok) {
           const errData = await res.json();
           if (errData.error === "table_missing") {
@@ -430,7 +447,7 @@ export default function PatrulhaRuralApp() {
       console.error("Erro ao carregar dados:", err);
       setErrorToast(err.message || "Erro ao carregar dados.");
     }
-  }, [dbSource]);
+  }, [dbSource, authFetch]);
 
   // Load properties on mount
   useEffect(() => {
@@ -459,7 +476,7 @@ export default function PatrulhaRuralApp() {
           });
         } else {
           // Fallback fetch
-          fetch("/api/properties")
+          authFetch("/api/properties")
             .then(res => res.json())
             .then(data => {
               const found = (data.properties || []).find((p: Property) => p.id === selectedPropertyId);
@@ -487,7 +504,7 @@ export default function PatrulhaRuralApp() {
     return () => {
       active = false;
     };
-  }, [selectedPropertyId, dbSource, allProperties]);
+  }, [selectedPropertyId, dbSource, allProperties, authFetch]);
 
   // Handle Search Input Change
   const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -686,7 +703,7 @@ export default function PatrulhaRuralApp() {
       let updatedProp: Property | undefined;
 
       if (dbSource === "supabase") {
-        const res = await fetch("/api/properties", {
+        const res = await authFetch("/api/properties", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ property: propertyToSave }),
@@ -2063,7 +2080,7 @@ export default function PatrulhaRuralApp() {
                       if (propertyToDelete.id !== undefined) {
                         try {
                           if (dbSource === "supabase") {
-                            const res = await fetch(`/api/properties?id=${propertyToDelete.id}`, {
+                            const res = await authFetch(`/api/properties?id=${propertyToDelete.id}`, {
                               method: "DELETE",
                             });
                             if (!res.ok) {

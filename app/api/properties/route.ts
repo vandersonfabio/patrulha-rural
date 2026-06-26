@@ -1,5 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabase, toSupabase, fromSupabase, SupabaseProperty } from "@/lib/supabase";
+import { 
+  supabase, 
+  toSupabase, 
+  fromSupabase, 
+  SupabaseProperty, 
+  validateSessionUser, 
+  sanitizeInput 
+} from "@/lib/supabase";
 
 function getSqlSchema() {
   return `
@@ -37,6 +44,15 @@ WITH CHECK (true);
 
 export async function GET(req: NextRequest) {
   try {
+    // Hardening: Verify Supabase Session Token Server-side
+    const user = await validateSessionUser(req);
+    if (!user) {
+      return NextResponse.json(
+        { error: "unauthorized", message: "Não autorizado. Token de sessão inválido, ausente ou expirado." }, 
+        { status: 401 }
+      );
+    }
+
     const { data, error } = await supabase
       .from("properties")
       .select("*")
@@ -66,13 +82,47 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
+    // Hardening: Verify Supabase Session Token Server-side
+    const user = await validateSessionUser(req);
+    if (!user) {
+      return NextResponse.json(
+        { error: "unauthorized", message: "Não autorizado. Token de sessão inválido, ausente ou expirado." }, 
+        { status: 401 }
+      );
+    }
+
     const body = await req.json();
     const { property } = body;
     if (!property) {
       return NextResponse.json({ error: "Propriedade ausente no corpo" }, { status: 400 });
     }
 
-    const sProp = toSupabase(property);
+    // Hardening: Server-side input validation & sanitization (prevents basic XSS & enforces schema limits)
+    const sanitizedProperty = {
+      ...property,
+      name: sanitizeInput(property.name),
+      municipality: sanitizeInput(property.municipality),
+      referencePoint: sanitizeInput(property.referencePoint),
+      gpsCoordinates: sanitizeInput(property.gpsCoordinates),
+      ownerName: sanitizeInput(property.ownerName),
+      cpf: sanitizeInput(property.cpf),
+      birthDate: sanitizeInput(property.birthDate),
+      contactPhone: sanitizeInput(property.contactPhone),
+      wifiName: sanitizeInput(property.wifiName),
+      wifiPass: sanitizeInput(property.wifiPass),
+      lastPatrol: sanitizeInput(property.lastPatrol),
+      residents: Array.isArray(property.residents) ? property.residents.map(sanitizeInput) : [],
+      photos: Array.isArray(property.photos) ? property.photos.map(sanitizeInput) : [],
+    };
+
+    if (!sanitizedProperty.name || !sanitizedProperty.municipality || !sanitizedProperty.ownerName) {
+      return NextResponse.json(
+        { error: "Campos obrigatórios ausentes: nome da propriedade, município e proprietário são necessários." }, 
+        { status: 400 }
+      );
+    }
+
+    const sProp = toSupabase(sanitizedProperty);
     let result;
 
     if (sProp.id) {
@@ -109,6 +159,15 @@ export async function POST(req: NextRequest) {
 
 export async function DELETE(req: NextRequest) {
   try {
+    // Hardening: Verify Supabase Session Token Server-side
+    const user = await validateSessionUser(req);
+    if (!user) {
+      return NextResponse.json(
+        { error: "unauthorized", message: "Não autorizado. Token de sessão inválido, ausente ou expirado." }, 
+        { status: 401 }
+      );
+    }
+
     const { searchParams } = new URL(req.url);
     const clearAll = searchParams.get("clearAll");
     

@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { Property } from "./db";
+import { NextRequest } from "next/server";
 
 // Normalize Supabase URL to strip rest/v1 suffixes if present
 const originalUrl = process.env.SUPABASE_URL || "https://frswlyctlykrnaorfoql.supabase.co/rest/v1/";
@@ -7,6 +8,37 @@ const supabaseUrl = originalUrl.replace(/\/rest\/v1\/?$/, "");
 const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || "sb_publishable_jVJImDlEiY82jY_mmj-uOw_rszYR9Wz";
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+/**
+ * Validates the request's Supabase session using the Authorization Bearer token.
+ */
+export async function validateSessionUser(req: NextRequest) {
+  const authHeader = req.headers.get("Authorization");
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return null;
+  }
+  const token = authHeader.substring(7);
+  try {
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+    if (error || !user) {
+      console.error("Autenticação inválida:", error?.message);
+      return null;
+    }
+    return user;
+  } catch (err) {
+    console.error("Erro ao validar sessão do usuário:", err);
+    return null;
+  }
+}
+
+/**
+ * Strips HTML tags and trims strings to protect against basic XSS payloads.
+ */
+export function sanitizeInput(str: any): string {
+  if (str === null || str === undefined) return "";
+  const s = String(str);
+  return s.replace(/<[^>]*>/g, "").trim();
+}
 
 export interface SupabaseProperty {
   id?: number;

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
+import { supabase, validateSessionUser } from "@/lib/supabase";
 
 function getSqlSchema() {
   return `
@@ -37,6 +37,15 @@ WITH CHECK (true);
 
 export async function GET(req: NextRequest) {
   try {
+    // Hardening: Verify Supabase Session Token Server-side
+    const user = await validateSessionUser(req);
+    if (!user) {
+      return NextResponse.json(
+        { error: "unauthorized", message: "Não autorizado. Token de sessão inválido, ausente ou expirado." }, 
+        { status: 401 }
+      );
+    }
+
     const originalUrl = process.env.SUPABASE_URL || "https://frswlyctlykrnaorfoql.supabase.co/rest/v1/";
     const hasKeys = !!process.env.SUPABASE_URL && !!process.env.SUPABASE_ANON_KEY;
 
