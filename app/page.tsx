@@ -102,6 +102,60 @@ function getFormattedPatrolDate(): string {
   return `${day}/${month}/${year} ${hours}:${minutes}`;
 }
 
+/**
+ * Compresses an image client-side to about 50KB-100KB using HTML5 Canvas.
+ * This prevents saving/uploading huge multi-megabyte payloads to Supabase and IndexedDB,
+ * which drastically improves rendering performance and startup latency on new devices.
+ */
+function compressImage(file: File): Promise<string> {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        const MAX_WIDTH = 800;
+        const MAX_HEIGHT = 800;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height) {
+          if (width > MAX_WIDTH) {
+            height *= MAX_WIDTH / width;
+            width = MAX_WIDTH;
+          }
+        } else {
+          if (height > MAX_HEIGHT) {
+            width *= MAX_HEIGHT / height;
+            height = MAX_HEIGHT;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          // Draw image to canvas with the new bounds
+          ctx.drawImage(img, 0, 0, width, height);
+          // Export to low-weight high-quality JPEG (0.7 is the sweet spot of compression)
+          const compressedBase64 = canvas.toDataURL("image/jpeg", 0.7);
+          resolve(compressedBase64);
+        } else {
+          resolve(event.target?.result as string || "");
+        }
+      };
+      img.onerror = () => {
+        resolve(event.target?.result as string || "");
+      };
+      img.src = event.target?.result as string;
+    };
+    reader.onerror = () => {
+      resolve("");
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 // Simulated default credentials for simple demonstration
 const DEFAULT_BADGE = "agente@patrulha.gov";
 const DEFAULT_PASSWORD = "senha_patrulha";
@@ -401,6 +455,10 @@ export default function PatrulhaRuralApp() {
     const activeSource = forceSource || dbSource;
     try {
       if (activeSource === "supabase") {
+        if (!isLoggedIn) {
+          // Guard: Evita buscar dados do Supabase sem estar autenticado
+          return;
+        }
         const res = await authFetch("/api/properties");
         if (!res.ok) {
           const errData = await res.json();
@@ -447,7 +505,7 @@ export default function PatrulhaRuralApp() {
       console.error("Erro ao carregar dados:", err);
       setErrorToast(err.message || "Erro ao carregar dados.");
     }
-  }, [dbSource, authFetch]);
+  }, [dbSource, authFetch, isLoggedIn]);
 
   // Load properties on mount
   useEffect(() => {
@@ -464,6 +522,7 @@ export default function PatrulhaRuralApp() {
 
   // Sync details when selected ID changes
   useEffect(() => {
+    if (!isLoggedIn) return;
     let active = true;
     if (selectedPropertyId !== null) {
       if (dbSource === "supabase") {
@@ -504,7 +563,7 @@ export default function PatrulhaRuralApp() {
     return () => {
       active = false;
     };
-  }, [selectedPropertyId, dbSource, allProperties, authFetch]);
+  }, [selectedPropertyId, dbSource, allProperties, authFetch, isLoggedIn]);
 
   // Handle Search Input Change
   const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -972,15 +1031,11 @@ export default function PatrulhaRuralApp() {
                     </button>
                   </form>
 
-                  {/* Demonstration Quick Bypass Block */}
+                  {/* Informação sobre novos cadastros */}
                   <div className="mt-6 pt-4 border-t border-[#45483e]/50 text-center">
-                    <p className="text-[11px] text-[#76786d] mb-2">Para fins de demonstração, clique abaixo:</p>
-                    <button
-                      onClick={handleAutoFillLogin}
-                      className="text-xs bg-[#3b4626] text-[#bfcca1] border border-[#bfcca1]/30 hover:border-[#bfcca1] px-3 py-1.5 rounded-full transition-all"
-                    >
-                      Preencher Credenciais Oficiais
-                    </button>
+                    <p className="text-[11px] text-[#76786d]">
+                      Para cadastro de novos usuários, procure a seção de informática da unidade.
+                    </p>
                   </div>
                 </div>
 
@@ -1065,9 +1120,9 @@ export default function PatrulhaRuralApp() {
 
                   {filteredProperties.length > 0 ? (
                     <div className="space-y-3">
-                      {(showAllProperties ? filteredProperties : filteredProperties.slice(0, 5)).map((prop) => (
+                      {(showAllProperties ? filteredProperties : filteredProperties.slice(0, 5)).map((prop, idx) => (
                         <div
-                          key={prop.id}
+                          key={prop.id !== undefined && prop.id !== null ? `property-item-${prop.id}` : `property-temp-${idx}`}
                           onClick={() => {
                             if (prop.id !== undefined) {
                               setSelectedPropertyId(prop.id);
@@ -1577,15 +1632,17 @@ export default function PatrulhaRuralApp() {
                               accept="image/*"
                               capture="environment"
                               className="hidden"
-                              onChange={(e) => {
+                              onChange={async (e) => {
                                 const file = e.target.files?.[0];
                                 if (file) {
-                                  const reader = new FileReader();
-                                  reader.onloadend = () => {
-                                    handleFormFieldChange("photo", reader.result as string);
-                                    showSuccessFeedback("Foto capturada com sucesso!");
-                                  };
-                                  reader.readAsDataURL(file);
+                                  try {
+                                    const compressed = await compressImage(file);
+                                    handleFormFieldChange("photo", compressed);
+                                    showSuccessFeedback("Foto capturada e otimizada com sucesso!");
+                                  } catch (err) {
+                                    console.error("Erro ao otimizar imagem:", err);
+                                    showErrorFeedback("Erro ao otimizar a foto da câmera.");
+                                  }
                                 }
                               }}
                             />
@@ -1599,15 +1656,17 @@ export default function PatrulhaRuralApp() {
                               type="file"
                               accept="image/*"
                               className="hidden"
-                              onChange={(e) => {
+                              onChange={async (e) => {
                                 const file = e.target.files?.[0];
                                 if (file) {
-                                  const reader = new FileReader();
-                                  reader.onloadend = () => {
-                                    handleFormFieldChange("photo", reader.result as string);
-                                    showSuccessFeedback("Foto carregada com sucesso!");
-                                  };
-                                  reader.readAsDataURL(file);
+                                  try {
+                                    const compressed = await compressImage(file);
+                                    handleFormFieldChange("photo", compressed);
+                                    showSuccessFeedback("Foto carregada e otimizada com sucesso!");
+                                  } catch (err) {
+                                    console.error("Erro ao otimizar imagem:", err);
+                                    showErrorFeedback("Erro ao otimizar a foto da galeria.");
+                                  }
                                 }
                               }}
                             />
