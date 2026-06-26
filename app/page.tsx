@@ -503,7 +503,14 @@ export default function PatrulhaRuralApp() {
       }
     } catch (err: any) {
       console.error("Erro ao carregar dados:", err);
-      setErrorToast(err.message || "Erro ao carregar dados.");
+      if (err.message === "unauthorized") {
+        setIsLoggedIn(false);
+        setCurrentUser("");
+        localStorage.removeItem("patrulha_user");
+        setCurrentView("login");
+      } else {
+        setErrorToast(err.message || "Erro ao carregar dados.");
+      }
     }
   }, [dbSource, authFetch, isLoggedIn]);
 
@@ -1122,7 +1129,7 @@ export default function PatrulhaRuralApp() {
                     <div className="space-y-3">
                       {(showAllProperties ? filteredProperties : filteredProperties.slice(0, 5)).map((prop, idx) => (
                         <div
-                          key={prop.id !== undefined && prop.id !== null ? `property-item-${prop.id}` : `property-temp-${idx}`}
+                          key={prop.id !== undefined && prop.id !== null ? `property-item-${prop.id}-${idx}` : `property-temp-${idx}`}
                           onClick={() => {
                             if (prop.id !== undefined) {
                               setSelectedPropertyId(prop.id);

@@ -78,23 +78,23 @@ export default function SeridoMap({ properties, onSelectProperty }: SeridoMapPro
     markersRef.current.forEach(marker => marker.remove());
     markersRef.current = [];
 
-    // Custom pulsing marker icon styling using Tailwind
+    // Custom pulsing marker icon styling using Tailwind (decreased by 50%)
     const createCustomIcon = (name: string) => {
       return L.divIcon({
         className: "custom-leaflet-marker",
         html: `
           <div class="flex flex-col items-center">
-            <span class="relative flex h-4.5 w-4.5">
+            <span class="relative flex h-[9px] w-[9px]">
               <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#bfcca1] opacity-75"></span>
-              <span class="relative inline-flex rounded-full h-4.5 w-4.5 bg-[#bfcca1] border-2 border-[#121410] shadow-md"></span>
+              <span class="relative inline-flex rounded-full h-[9px] w-[9px] bg-[#bfcca1] border border-[#121410] shadow-md"></span>
             </span>
-            <div class="bg-[#121410]/95 text-[9px] font-mono font-extrabold px-2 py-0.5 rounded border border-[#bfcca1]/40 text-[#bfcca1] mt-1 shadow-lg whitespace-nowrap overflow-hidden max-w-[120px] text-ellipsis">
+            <div class="bg-[#121410]/95 text-[6.5px] font-mono font-extrabold px-1 py-0 rounded border border-[#bfcca1]/40 text-[#bfcca1] mt-0.5 shadow-lg whitespace-nowrap overflow-hidden max-w-[60px] text-ellipsis">
               ${name}
             </div>
           </div>
         `,
-        iconSize: [120, 45],
-        iconAnchor: [60, 22]
+        iconSize: [60, 22],
+        iconAnchor: [30, 11]
       });
     };
 
