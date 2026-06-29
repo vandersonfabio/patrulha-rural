@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { 
   supabase, 
+  getSupabaseClient,
   toSupabase, 
   fromSupabase, 
   SupabaseProperty, 
@@ -53,10 +54,47 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const { data, error } = await supabase
+    const supabaseClient = getSupabaseClient(req);
+
+    const { searchParams } = new URL(req.url);
+    const idParam = searchParams.get("id");
+
+    if (idParam) {
+      const id = parseInt(idParam, 10);
+      if (isNaN(id)) {
+        return NextResponse.json({ error: "ID inválido" }, { status: 400 });
+      }
+
+      const { data, error } = await supabaseClient
+        .from("properties")
+        .select("*")
+        .eq("id", id)
+        .single();
+
+      if (error) {
+        return NextResponse.json({ error: error.message }, { status: 500 });
+      }
+
+      if (!data) {
+        return NextResponse.json({ error: "Propriedade não encontrada" }, { status: 404 });
+      }
+
+      return NextResponse.json({ property: fromSupabase(data as SupabaseProperty) });
+    }
+
+    const q = searchParams.get("q");
+    let queryBuilder = supabaseClient
       .from("properties")
-      .select("*")
-      .order("id", { ascending: true });
+      .select("id, name, municipality, reference_point, gps_coordinates, owner_name, collaborative_owner, last_patrol");
+
+    if (q) {
+      const searchStr = `%${q}%`;
+      queryBuilder = queryBuilder.or(
+        `name.ilike.${searchStr},municipality.ilike.${searchStr},owner_name.ilike.${searchStr},reference_point.ilike.${searchStr},cpf.ilike.${searchStr},contact_phone.ilike.${searchStr},wifi_name.ilike.${searchStr}`
+      );
+    }
+
+    const { data, error } = await queryBuilder.order("id", { ascending: false });
 
     if (error) {
       // Check if table does not exist (relation error in Postgres is code 42P01)
@@ -124,10 +162,11 @@ export async function POST(req: NextRequest) {
 
     const sProp = toSupabase(sanitizedProperty);
     let result;
+    const supabaseClient = getSupabaseClient(req);
 
     if (sProp.id) {
       // Update
-      const { data, error } = await supabase
+      const { data, error } = await supabaseClient
         .from("properties")
         .upsert(sProp)
         .select();
@@ -139,7 +178,7 @@ export async function POST(req: NextRequest) {
     } else {
       // Insert (omit ID to auto-increment)
       const { id, ...insertData } = sProp;
-      const { data, error } = await supabase
+      const { data, error } = await supabaseClient
         .from("properties")
         .insert(insertData)
         .select();
@@ -168,11 +207,24 @@ export async function DELETE(req: NextRequest) {
       );
     }
 
+    // Role-based access control: Only users with "admin" role or admin email can delete properties
+    const role = user.app_metadata?.role || user.user_metadata?.role;
+    const isAdmin = role === "admin" || user.email === "admin@patrulha.gov" || user.email?.startsWith("admin@");
+
+    if (!isAdmin) {
+      return NextResponse.json(
+        { error: "Apenas usuários com perfil 'admin' podem excluir propriedades." },
+        { status: 403 }
+      );
+    }
+
+    const supabaseClient = getSupabaseClient(req);
+
     const { searchParams } = new URL(req.url);
     const clearAll = searchParams.get("clearAll");
     
     if (clearAll === "true") {
-      const { error } = await supabase
+      const { error } = await supabaseClient
         .from("properties")
         .delete()
         .gt("id", 0);
@@ -194,7 +246,7 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: "ID inválido" }, { status: 400 });
     }
 
-    const { error } = await supabase
+    const { error } = await supabaseClient
       .from("properties")
       .delete()
       .eq("id", id);

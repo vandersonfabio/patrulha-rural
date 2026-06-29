@@ -35,7 +35,7 @@ import {
   Copy
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import { QRCodeSVG } from "qrcode.react";
+import dynamic from "next/dynamic";
 import { 
   Property, 
   saveProperty, 
@@ -46,7 +46,34 @@ import {
   clearAllProperties
 } from "@/lib/db";
 import { supabase } from "@/lib/supabase";
-import SeridoMap from "@/components/SeridoMap";
+
+const SeridoMap = dynamic(() => import("@/components/SeridoMap"), {
+  ssr: false,
+  loading: () => (
+    <div className="w-full h-full bg-[#121410] flex items-center justify-center text-xs text-[#76786d] font-mono">
+      Carregando mapa...
+    </div>
+  ),
+});
+
+const PropertyQRCode = dynamic(() => import("@/components/PropertyQRCode"), {
+  ssr: false,
+  loading: () => (
+    <div className="w-[140px] h-[140px] bg-[#1a1c18] flex items-center justify-center text-[10px] text-[#76786d] font-mono">
+      ...
+    </div>
+  ),
+});
+
+// Simple client-side cache for GET API requests to avoid redundant fetches
+const clientCache: Record<string, { data: any; timestamp: number }> = {};
+const CACHE_TTL = 15000; // 15 seconds cache TTL
+
+const clearClientCache = () => {
+  for (const key in clientCache) {
+    delete clientCache[key];
+  }
+};
 
 // Helper functions defined outside the component to preserve React component purity
 function generateDefaultPhoto(): string {
@@ -162,12 +189,15 @@ const DEFAULT_PASSWORD = "senha_patrulha";
 
 export default function PatrulhaRuralApp() {
   const [isMounted, setIsMounted] = useState(false);
+  const searchTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
 
   // Navigation State
   const [currentView, setCurrentView] = useState<"login" | "search" | "details" | "create" | "supabase">("login");
   const [selectedPropertyId, setSelectedPropertyId] = useState<number | null>(null);
+  const [isLoadingProperties, setIsLoadingProperties] = useState(false);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [currentUser, setCurrentUser] = useState<string>("");
+  const [isAdmin, setIsAdmin] = useState(false);
 
   // Supabase Integration State
   const [dbSource, setDbSource] = useState<"local" | "supabase">("supabase");
@@ -222,22 +252,30 @@ export default function PatrulhaRuralApp() {
   const checkSupabaseConnection = React.useCallback(async () => {
     setIsCheckingSupabase(true);
     try {
-      const res = await fetch("/api/supabase/status");
-      const data = await res.json();
+      const res = await authFetch("/api/supabase/status");
+      const contentType = res.headers.get("content-type");
+      let data;
+      if (contentType && contentType.includes("application/json")) {
+        data = await res.json();
+      } else {
+        const text = await res.text();
+        console.error("Non-JSON status response:", text);
+        throw new Error("O servidor retornou uma resposta inválida (não JSON).");
+      }
       setSupabaseStatus(data);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
       setSupabaseStatus({
         connected: false,
         tableExists: false,
         supabaseUrl: "https://frswlyctlykrnaorfoql.supabase.co",
         usingFallback: true,
-        message: "Erro ao conectar-se à API local do servidor."
+        message: "Erro ao conectar-se à API local do servidor: " + err.message
       });
     } finally {
       setIsCheckingSupabase(false);
     }
-  }, []);
+  }, [authFetch]);
 
   useEffect(() => {
     Promise.resolve().then(async () => {
@@ -251,12 +289,18 @@ export default function PatrulhaRuralApp() {
           const formattedUser = `Agente ${badgeName}`;
           setIsLoggedIn(true);
           setCurrentUser(formattedUser);
+          
+          const userRole = session.user.app_metadata?.role || session.user.user_metadata?.role;
+          const isUserAdmin = userRole === "admin" || email === "admin@patrulha.gov" || email.startsWith("admin@");
+          setIsAdmin(isUserAdmin);
+          
           localStorage.setItem("patrulha_user", formattedUser);
           setCurrentView("search");
         } else {
           // Hardening: Require real Supabase session, clear insecure local bypass
           setIsLoggedIn(false);
           setCurrentUser("");
+          setIsAdmin(false);
           localStorage.removeItem("patrulha_user");
           setCurrentView("login");
         }
@@ -264,6 +308,7 @@ export default function PatrulhaRuralApp() {
         console.error("Erro ao verificar sessão do Supabase no login:", err);
         setIsLoggedIn(false);
         setCurrentUser("");
+        setIsAdmin(false);
         localStorage.removeItem("patrulha_user");
         setCurrentView("login");
       }
@@ -322,20 +367,30 @@ export default function PatrulhaRuralApp() {
 
       for (let i = 0; i < localProps.length; i++) {
         const prop = localProps[i];
-        const res = await fetch("/api/properties", {
+        const res = await authFetch("/api/properties", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ property: prop }),
         });
         if (!res.ok) {
-          const errData = await res.json();
-          throw new Error(errData.error || "Erro ao sincronizar item");
+          const contentType = res.headers.get("content-type");
+          let errMsg = "Erro ao sincronizar item";
+          if (contentType && contentType.includes("application/json")) {
+            const errData = await res.json();
+            errMsg = errData.error || errMsg;
+          } else {
+            const text = await res.text();
+            console.error("Non-JSON sync error:", text);
+            errMsg = `Erro HTTP ${res.status}: ${res.statusText}`;
+          }
+          throw new Error(errMsg);
         }
         setSyncProgress(prev => ({ ...prev, current: i + 1 }));
       }
 
       showSuccessFeedback("Todos os registros locais foram enviados para o Supabase!");
       await checkSupabaseConnection();
+      clearClientCache();
       await refreshPropertiesList("", "supabase");
     } catch (err: any) {
       console.error(err);
@@ -351,10 +406,28 @@ export default function PatrulhaRuralApp() {
     try {
       const res = await authFetch("/api/properties");
       if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.error || "Erro ao buscar dados do Supabase");
+        const contentType = res.headers.get("content-type");
+        let errMsg = "Erro ao buscar dados do Supabase";
+        if (contentType && contentType.includes("application/json")) {
+          const errData = await res.json();
+          errMsg = errData.error || errMsg;
+        } else {
+          const text = await res.text();
+          console.error("Non-JSON pull error:", text);
+          errMsg = `Erro HTTP ${res.status}: ${res.statusText}`;
+        }
+        throw new Error(errMsg);
       }
-      const data = await res.json();
+      
+      const contentType = res.headers.get("content-type");
+      let data;
+      if (contentType && contentType.includes("application/json")) {
+        data = await res.json();
+      } else {
+        const text = await res.text();
+        console.error("Non-JSON pull response:", text);
+        throw new Error("O servidor retornou uma resposta inválida (não JSON).");
+      }
       const cloudProps = data.properties || [];
       if (cloudProps.length === 0) {
         showErrorFeedback("Não há dados na nuvem para baixar.");
@@ -411,6 +484,7 @@ export default function PatrulhaRuralApp() {
       setSelectedProperty(null);
       
       showSuccessFeedback("Todos os cadastros foram apagados com sucesso!");
+      clearClientCache();
       await refreshPropertiesList();
     } catch (err: any) {
       console.error(err);
@@ -450,56 +524,111 @@ export default function PatrulhaRuralApp() {
   const [isLocating, setIsLocating] = useState(false);
   const [showAllProperties, setShowAllProperties] = useState(false);
 
+  // Helper function to parse patrol date string ("DD/MM/YYYY HH:mm") to timestamp for sorting
+  const parseLastPatrolToTimestamp = (lastPatrolStr: string): number => {
+    if (!lastPatrolStr) return 0;
+    try {
+      const parts = lastPatrolStr.trim().split(" ");
+      if (parts.length < 1) return 0;
+      const dateParts = parts[0].split("/");
+      if (dateParts.length < 3) return 0;
+      const day = parseInt(dateParts[0], 10);
+      const month = parseInt(dateParts[1], 10) - 1;
+      const year = parseInt(dateParts[2], 10);
+      
+      let hours = 0;
+      let minutes = 0;
+      if (parts.length > 1) {
+        const timeParts = parts[1].split(":");
+        if (timeParts.length >= 2) {
+          hours = parseInt(timeParts[0], 10);
+          minutes = parseInt(timeParts[1], 10);
+        }
+      }
+      return new Date(year, month, day, hours, minutes).getTime();
+    } catch (e) {
+      return 0;
+    }
+  };
+
   // Load/Refresh the property catalog from IndexedDB or Supabase
   const refreshPropertiesList = React.useCallback(async (query = "", forceSource?: "local" | "supabase") => {
     const activeSource = forceSource || dbSource;
+    setIsLoadingProperties(true);
     try {
+      const sortByLastUpdate = (a: any, b: any) => {
+        const tA = parseLastPatrolToTimestamp(a.lastPatrol || a.last_patrol);
+        const tB = parseLastPatrolToTimestamp(b.lastPatrol || b.last_patrol);
+        if (tA !== tB) {
+          return tB - tA; // descending
+        }
+        return (b.id || 0) - (a.id || 0); // fallback to ID descending
+      };
+
       if (activeSource === "supabase") {
         if (!isLoggedIn) {
           // Guard: Evita buscar dados do Supabase sem estar autenticado
           return;
         }
-        const res = await authFetch("/api/properties");
-        if (!res.ok) {
-          const errData = await res.json();
-          if (errData.error === "table_missing") {
-            throw new Error("A tabela 'properties' está pendente de criação no Supabase.");
+
+        const cacheKey = `properties-list-${query}`;
+        const cached = clientCache[cacheKey];
+        let data;
+
+        if (cached && (Date.now() - cached.timestamp < CACHE_TTL)) {
+          data = cached.data;
+        } else {
+          const url = query.trim() 
+            ? `/api/properties?q=${encodeURIComponent(query)}` 
+            : "/api/properties";
+          const res = await authFetch(url);
+          if (!res.ok) {
+            const contentType = res.headers.get("content-type");
+            let errMsg = "Erro de conexão com o Supabase";
+            if (contentType && contentType.includes("application/json")) {
+              const errData = await res.json();
+              if (errData.error === "table_missing") {
+                throw new Error("A tabela 'properties' está pendente de criação no Supabase.");
+              }
+              errMsg = errData.error || errMsg;
+            } else {
+              const text = await res.text();
+              errMsg = `Erro HTTP ${res.status}: ${text.substring(0, 100)}`;
+            }
+            throw new Error(errMsg);
           }
-          throw new Error(errData.error || "Erro de conexão com o Supabase");
+          
+          const contentType = res.headers.get("content-type");
+          if (contentType && contentType.includes("application/json")) {
+            data = await res.json();
+          } else {
+            const text = await res.text();
+            throw new Error(`Resposta inválida do servidor (não JSON): ${text.substring(0, 100)}`);
+          }
+          clientCache[cacheKey] = { data, timestamp: Date.now() };
         }
-        const data = await res.json();
-        const all = data.properties || [];
-        
-        let results = all;
-        if (query.trim()) {
-          const normalizedQuery = query.toLowerCase().trim();
-          results = all.filter((prop: Property) => {
-            const nameMatch = prop.name.toLowerCase().includes(normalizedQuery);
-            const ownerMatch = prop.ownerName.toLowerCase().includes(normalizedQuery);
-            
-            const queryDigits = normalizedQuery.replace(/\D/g, "");
-            const cpfMatch = queryDigits.length > 0 && prop.cpf.replace(/\D/g, "").includes(queryDigits);
-            const phoneMatch = queryDigits.length > 0 && prop.contactPhone.replace(/\D/g, "").includes(queryDigits);
-            
-            const municipalityMatch = prop.municipality.toLowerCase().includes(normalizedQuery);
-            const referenceMatch = prop.referencePoint ? prop.referencePoint.toLowerCase().includes(normalizedQuery) : false;
-            
-            const residentMatch = prop.residents && prop.residents.some((res) => 
-              res.toLowerCase().includes(normalizedQuery)
-            );
-            const wifiMatch = prop.wifiName ? prop.wifiName.toLowerCase().includes(normalizedQuery) : false;
-            
-            return nameMatch || ownerMatch || cpfMatch || phoneMatch || municipalityMatch || referenceMatch || residentMatch || wifiMatch;
+
+        const list = data.properties || [];
+        const sortedList = [...list].sort(sortByLastUpdate);
+        setPropertiesList(sortedList);
+
+        // If it's a general list, update allProperties as well.
+        // If it's a filtered search, keep the existing allProperties (so map stays populated) or default to the list
+        if (!query.trim()) {
+          setAllProperties(sortedList);
+        } else {
+          setAllProperties(prev => {
+            const sortedPrev = [...prev].sort(sortByLastUpdate);
+            return sortedPrev.length > 0 ? sortedPrev : sortedList;
           });
         }
-        
-        setPropertiesList(results);
-        setAllProperties(all);
       } else {
         const results = await searchProperties(query);
         const all = await getAllProperties();
-        setPropertiesList(results);
-        setAllProperties(all);
+        const sortedResults = [...results].sort(sortByLastUpdate);
+        const sortedAll = [...all].sort(sortByLastUpdate);
+        setPropertiesList(sortedResults);
+        setAllProperties(sortedAll);
       }
     } catch (err: any) {
       console.error("Erro ao carregar dados:", err);
@@ -511,6 +640,8 @@ export default function PatrulhaRuralApp() {
       } else {
         setErrorToast(err.message || "Erro ao carregar dados.");
       }
+    } finally {
+      setIsLoadingProperties(false);
     }
   }, [dbSource, authFetch, isLoggedIn]);
 
@@ -533,21 +664,24 @@ export default function PatrulhaRuralApp() {
     let active = true;
     if (selectedPropertyId !== null) {
       if (dbSource === "supabase") {
-        const prop = allProperties.find(p => p.id === selectedPropertyId);
-        if (active && prop) {
-          Promise.resolve().then(() => {
-            if (active) {
-              setSelectedProperty(prop);
-            }
-          });
+        const cacheKey = `property-detail-${selectedPropertyId}`;
+        const cached = clientCache[cacheKey];
+        if (cached && (Date.now() - cached.timestamp < CACHE_TTL)) {
+          setSelectedProperty(cached.data);
         } else {
-          // Fallback fetch
-          authFetch("/api/properties")
-            .then(res => res.json())
+          authFetch(`/api/properties?id=${selectedPropertyId}`)
+            .then(async res => {
+              const contentType = res.headers.get("content-type");
+              if (res.ok && contentType && contentType.includes("application/json")) {
+                return res.json();
+              }
+              const text = await res.text();
+              throw new Error(`Non-JSON response (${res.status}): ${text.substring(0, 100)}`);
+            })
             .then(data => {
-              const found = (data.properties || []).find((p: Property) => p.id === selectedPropertyId);
-              if (active && found) {
-                setSelectedProperty(found);
+              if (active && data.property) {
+                clientCache[cacheKey] = { data: data.property, timestamp: Date.now() };
+                setSelectedProperty(data.property);
               }
             })
             .catch(err => console.error("Error fetching single property", err));
@@ -570,13 +704,25 @@ export default function PatrulhaRuralApp() {
     return () => {
       active = false;
     };
-  }, [selectedPropertyId, dbSource, allProperties, authFetch, isLoggedIn]);
+  }, [selectedPropertyId, dbSource, authFetch, isLoggedIn]);
 
   // Handle Search Input Change
   const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
     setSearchQuery(val);
-    refreshPropertiesList(val);
+    
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+    }
+    
+    if (dbSource === "supabase") {
+      searchTimeoutRef.current = setTimeout(() => {
+        refreshPropertiesList(val);
+      }, 300); // 300ms debounce
+    } else {
+      // Local IndexedDB search is instant, run immediately
+      refreshPropertiesList(val);
+    }
   };
 
   // Handle Login submission
@@ -613,6 +759,11 @@ export default function PatrulhaRuralApp() {
         
         setIsLoggedIn(true);
         setCurrentUser(formattedUser);
+        
+        const userRole = data.user.app_metadata?.role || data.user.user_metadata?.role;
+        const isUserAdmin = userRole === "admin" || userEmail === "admin@patrulha.gov" || userEmail.startsWith("admin@");
+        setIsAdmin(isUserAdmin);
+        
         localStorage.setItem("patrulha_user", formattedUser);
         setCurrentView("search");
         showSuccessFeedback("Acesso autorizado. Patrulha iniciada!");
@@ -641,6 +792,7 @@ export default function PatrulhaRuralApp() {
     }
     setIsLoggedIn(false);
     setCurrentUser("");
+    setIsAdmin(false);
     localStorage.removeItem("patrulha_user");
     setCurrentView("login");
     showSuccessFeedback("Sessão encerrada!");
@@ -775,10 +927,27 @@ export default function PatrulhaRuralApp() {
           body: JSON.stringify({ property: propertyToSave }),
         });
         if (!res.ok) {
-          const errData = await res.json();
-          throw new Error(errData.error || "Erro ao salvar na Nuvem (Supabase)");
+          const contentType = res.headers.get("content-type");
+          let errMsg = "Erro ao salvar na Nuvem (Supabase)";
+          if (contentType && contentType.includes("application/json")) {
+            const errData = await res.json();
+            errMsg = errData.error || errMsg;
+          } else {
+            const text = await res.text();
+            errMsg = `Erro HTTP ${res.status}: ${text.substring(0, 100)}`;
+          }
+          throw new Error(errMsg);
         }
-        const resData = await res.json();
+        
+        const contentType = res.headers.get("content-type");
+        let resData;
+        if (contentType && contentType.includes("application/json")) {
+          resData = await res.json();
+        } else {
+          const text = await res.text();
+          throw new Error(`Resposta de salvamento inválida do servidor (não JSON): ${text.substring(0, 100)}`);
+        }
+        
         if (!resData.property) {
           throw new Error("Erro de resposta do Supabase: propriedade não retornada.");
         }
@@ -813,6 +982,7 @@ export default function PatrulhaRuralApp() {
       setResidents([]);
 
       // Refresh listings
+      clearClientCache();
       await refreshPropertiesList();
       
       if (isEditing) {
@@ -1125,7 +1295,19 @@ export default function PatrulhaRuralApp() {
                     </span>
                   </h3>
 
-                  {filteredProperties.length > 0 ? (
+                  {isLoadingProperties ? (
+                    <div className="space-y-3" id="loading-skeleton">
+                      {[1, 2, 3].map((n) => (
+                        <div key={n} className="bg-[#1a1c18] border border-[#45483e] rounded-xl p-4 flex gap-4 animate-pulse">
+                          <div className="flex-1 space-y-2 py-1">
+                            <div className="h-4 bg-[#45483e]/50 rounded w-1/3"></div>
+                            <div className="h-3 bg-[#45483e]/50 rounded w-1/2"></div>
+                            <div className="h-2 bg-[#45483e]/50 rounded w-1/4"></div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : filteredProperties.length > 0 ? (
                     <div className="space-y-3">
                       {(showAllProperties ? filteredProperties : filteredProperties.slice(0, 5)).map((prop, idx) => (
                         <div
@@ -1139,15 +1321,6 @@ export default function PatrulhaRuralApp() {
                           }}
                           className="bg-[#1a1c18] hover:bg-[#20231f] border border-[#45483e] hover:border-[#bfcca1]/60 rounded-xl p-4 transition-all duration-150 cursor-pointer flex gap-4 relative shadow-sm"
                         >
-                          {/* Left thumbnail */}
-                          <div className="w-16 h-16 rounded-lg overflow-hidden shrink-0 bg-[#121410] border border-[#45483e] relative">
-                            <img 
-                              src={prop.photos[0] || generateDefaultPhoto()} 
-                              alt={prop.name} 
-                              className="w-full h-full object-cover"
-                            />
-                          </div>
-
                           {/* Details column */}
                           <div className="flex-1 min-w-0 flex flex-col justify-between">
                             <div>
@@ -1468,11 +1641,8 @@ export default function PatrulhaRuralApp() {
                       Placa de Identificação da Sede (QR-CODE)
                     </p>
                     <div className="bg-white p-3 rounded-xl inline-block shadow-md">
-                      <QRCodeSVG
+                      <PropertyQRCode
                         value={`https://www.google.com/maps/dir/?api=1&destination=${selectedProperty.gpsCoordinates.replace(/\s+/g, "")}`}
-                        size={140}
-                        level="M"
-                        includeMargin={false}
                       />
                     </div>
                     <p className="text-[10px] text-[#76786d] max-w-xs mx-auto">
@@ -1481,16 +1651,18 @@ export default function PatrulhaRuralApp() {
                   </div>
 
                   {/* Danger/Delete zone */}
-                  <div className="pt-2">
-                    <button
-                      onClick={() => {
-                        setPropertyToDelete(selectedProperty);
-                      }}
-                      className="w-full bg-transparent hover:bg-[#69000c]/10 text-[#ffb4ac] border border-[#69000c] text-xs font-semibold py-2.5 rounded-lg transition-all"
-                    >
-                      Excluir Cadastro do Banco de Dados
-                    </button>
-                  </div>
+                  {isAdmin && (
+                    <div className="pt-2">
+                      <button
+                        onClick={() => {
+                          setPropertyToDelete(selectedProperty);
+                        }}
+                        className="w-full bg-transparent hover:bg-[#69000c]/10 text-[#ffb4ac] border border-[#69000c] text-xs font-semibold py-2.5 rounded-lg transition-all"
+                      >
+                        Excluir Cadastro do Banco de Dados
+                      </button>
+                    </div>
+                  )}
                 </div>
               </motion.div>
             )}
@@ -2150,8 +2322,16 @@ export default function PatrulhaRuralApp() {
                               method: "DELETE",
                             });
                             if (!res.ok) {
-                              const errData = await res.json();
-                              throw new Error(errData.error || "Erro ao excluir no Supabase");
+                              const contentType = res.headers.get("content-type");
+                              let errMsg = "Erro ao excluir no Supabase";
+                              if (contentType && contentType.includes("application/json")) {
+                                const errData = await res.json();
+                                errMsg = errData.error || errMsg;
+                              } else {
+                                const text = await res.text();
+                                errMsg = `Erro HTTP ${res.status}: ${text.substring(0, 100)}`;
+                              }
+                              throw new Error(errMsg);
                             }
                           } else {
                             await deleteProperty(propertyToDelete.id);
@@ -2160,6 +2340,7 @@ export default function PatrulhaRuralApp() {
                           setPropertyToDelete(null);
                           setSelectedPropertyId(null);
                           setCurrentView("search");
+                          clearClientCache();
                           await refreshPropertiesList();
                         } catch (err: any) {
                           console.error(err);

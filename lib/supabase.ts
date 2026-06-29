@@ -10,6 +10,28 @@ const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || "sb_publishable_jVJImDl
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 /**
+ * Creates a scoped Supabase client that propagates the user's JWT token.
+ * This is crucial for RLS (Row Level Security) on the server side.
+ */
+export function getSupabaseClient(req: NextRequest) {
+  const authHeader = req.headers.get("Authorization");
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return supabase;
+  }
+  const token = authHeader.substring(7);
+  return createClient(supabaseUrl, supabaseAnonKey, {
+    global: {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    },
+    auth: {
+      persistSession: false,
+    },
+  });
+}
+
+/**
  * Validates the request's Supabase session using the Authorization Bearer token.
  */
 export async function validateSessionUser(req: NextRequest) {

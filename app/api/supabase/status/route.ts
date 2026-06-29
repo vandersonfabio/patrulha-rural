@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabase, validateSessionUser } from "@/lib/supabase";
+import { supabase, getSupabaseClient, validateSessionUser } from "@/lib/supabase";
 
 function getSqlSchema() {
   return `
@@ -49,8 +49,10 @@ export async function GET(req: NextRequest) {
     const originalUrl = process.env.SUPABASE_URL || "https://frswlyctlykrnaorfoql.supabase.co/rest/v1/";
     const hasKeys = !!process.env.SUPABASE_URL && !!process.env.SUPABASE_ANON_KEY;
 
+    const supabaseClient = getSupabaseClient(req);
+
     // Run a quick query to test table existence and connection
-    const { data, error } = await supabase
+    const { data, error } = await supabaseClient
       .from("properties")
       .select("id")
       .limit(1);
