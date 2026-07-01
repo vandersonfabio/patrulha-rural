@@ -1,5 +1,6 @@
 import type {Metadata} from 'next';
 import './globals.css'; // Global styles
+import ConfirmExit from '../components/ConfirmExit';
 
 export const metadata: Metadata = {
   title: 'Patrulha Rural Comunitária | 6º BPM',
@@ -9,7 +10,10 @@ export const metadata: Metadata = {
 export default function RootLayout({children}: {children: React.ReactNode}) {
   return (
     <html lang="en">
-      <body suppressHydrationWarning>{children}</body>
+      <body suppressHydrationWarning>
+        <ConfirmExit />
+        {children}
+      </body>
     </html>
   );
 }

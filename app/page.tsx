@@ -1328,12 +1328,12 @@ export default function PatrulhaRuralApp() {
                                 <h4 className="font-bold text-sm text-[#e3e3dc] truncate pr-2">{prop.name}</h4>
                                 {prop.collaborativeOwner && (
                                   <span className="text-[9px] bg-[#3b4626] text-[#bfcca1] font-mono px-1 rounded border border-[#bfcca1]/30">
-                                    Colab
+                                    Colaborativo
                                   </span>
                                 )}
                               </div>
                               <p className="text-xs text-[#c6c7bb] font-medium truncate mt-0.5">
-                                Prop: <span className="text-[#e3e3dc]">{prop.ownerName}</span>
+                                Proprietário: <span className="text-[#e3e3dc]">{prop.ownerName}</span>
                               </p>
                               <p className="text-[11px] text-[#76786d] truncate mt-0.5 flex items-center gap-0.5">
                                 <MapPin className="w-3 h-3 text-[#bfcca1]" />
@@ -1342,7 +1342,7 @@ export default function PatrulhaRuralApp() {
                             </div>
 
                             <p className="text-[10px] font-mono text-[#76786d] text-right mt-1.5">
-                              Patrulha: {prop.lastPatrol || "Sem registro"}
+                              Última atualização: {prop.lastPatrol || "Sem registro"}
                             </p>
                           </div>
                         </div>
